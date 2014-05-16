@@ -5,16 +5,23 @@ module Spree
     helper 'spree/orders'
 
     def show
-      @body_id = "unicredit"
-      if params[:payment_method_id] and Spree::PaymentMethod.exists? params[:payment_method_id]
-        @payment_method = Spree::PaymentMethod.find params[:payment_method_id]
+      if current_order.present?
+        @order = current_order
       else
-        flash[:error] = "ERRORE, parametro payment_method_id errato, il metodo di pagamento con id=#{params[:payment_method_id]} non esiste !"
+        flash[:error] = 'ERROR, order not present'
         redirect_to checkout_state_url(:payment)
       end
 
+      @payment_method = Spree::PaymentMethod.find_by_type Spree::BillingIntegration::UnicreditPagonline
+      if @payment_method.blank?
+        flash[:error] = "ERROR, UnicreditPagonline not available"
+        redirect_to checkout_state_url(:payment)
+      end
+
+      @body_id = 'unicredit'
+
       # Preferred data
-      numeroCommerciante =  @payment_method.preferred_numero_commerciante
+      numeroCommerciante = @payment_method.preferred_numero_commerciante
       stabilimento = @payment_method.preferred_stabilimento
       userID = @payment_method.preferred_user_id
       password = @payment_method.preferred_password
@@ -27,12 +34,6 @@ module Spree
       stringaSegreta = @payment_method.preferred_stringa_segreta
 
       # Order data
-      if params[:order_id] and Spree::Order.exists? params[:order_id]
-        @order = Spree::Order.find params[:order_id]
-      else
-        flash[:error] = "ERRORE, parametro order_id errato, l'ordine id=#{params[:order_id]} non esiste !"
-        redirect_to checkout_state_url(:payment)
-      end
       numeroOrdine = @order.number
       totaleOrdine = (@order.total*100).to_i.to_s
 
@@ -72,7 +73,6 @@ module Spree
       inputUrl << "&mac=#{CGI.escape mac}"
 
       @form_url = inputUrl
-
     end
 
     def result_ko
@@ -227,7 +227,6 @@ module Spree
       end
       render :text => @msg
     end
-
 
 
     private

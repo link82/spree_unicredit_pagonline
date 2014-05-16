@@ -10,7 +10,7 @@ module Spree
       @payment_method = Spree::PaymentMethod.find(params[:order][:payments_attributes].first[:payment_method_id])
       if @payment_method && @payment_method.kind_of?(Spree::BillingIntegration::UnicreditPagonline)
         # @order.update_attributes(object_params)
-        redirect_to main_app.unicredit_pagonline_show_path(:order_id => @order.id, :payment_method_id => @payment_method.id)
+        redirect_to main_app.unicredit_pagonline_show_path
       end
     end
   end
