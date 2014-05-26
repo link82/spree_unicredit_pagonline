@@ -12,6 +12,7 @@ module Spree
       if @payment_method && @payment_method.kind_of?(Spree::BillingIntegration::UnicreditPagonline)
         payment_method_hash = { "payments_attributes" => [ {"payment_method_id" => @payment_method.id} ] }
         @order.update_attributes payment_method_hash
+
         redirect_to main_app.unicredit_pagonline_show_path
       end
     end
