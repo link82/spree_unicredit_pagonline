@@ -4,17 +4,16 @@ module Spree
     ssl_required
     helper 'spree/orders'
 
+    skip_before_filter :verify_authenticity_token
+    before_filter :set_payment_method
+
+
     def show
       if current_order.present?
         @order = current_order
+        @order.update_attribute(:payment_temp_total, @order.total)
       else
         flash[:error] = 'ERROR, order not present'
-        redirect_to checkout_state_url(:payment)
-      end
-
-      @payment_method = Spree::PaymentMethod.find_by_type Spree::BillingIntegration::UnicreditPagonline
-      if @payment_method.blank?
-        flash[:error] = "ERROR, UnicreditPagonline not available"
         redirect_to checkout_state_url(:payment)
       end
 
@@ -39,18 +38,18 @@ module Spree
 
       # Compute input string
       inputMac  = "numeroCommerciante=#{numeroCommerciante.strip}"
-      inputMac << "&stabilimento=#{stabilimento.strip}"
       inputMac << "&userID=#{userID.strip}"
       inputMac << "&password=#{password.strip}"
-      inputMac << "&numeroOrdine=#{numeroOrdine.strip}"
+      inputMac << "&numeroOrdine=#{numeroOrdine.strip}--#{@order.payment_sequence}"
       inputMac << "&totaleOrdine=#{totaleOrdine.strip}"
       inputMac << "&valuta=#{valuta.strip}"
-      inputMac << "&flagRiciclaOrdine=#{flagRiciclaOrdine.strip}"
-      inputMac << "&flagDeposito=#{flagDeposito.strip}"
-      inputMac << "&tipoRispostaApv=#{tipoRispostaApv.strip}"
+      inputMac << "&flagDeposito=#{flagDeposito}"
       inputMac << "&urlOk=#{urlOk.strip}"
       inputMac << "&urlKo=#{urlKo.strip}"
-      inputMac << "&#{stringaSegreta.strip}" # NB. the stringaSegreta !
+      inputMac << "&tipoRispostaApv=#{tipoRispostaApv.strip}"
+      inputMac << "&flagRiciclaOrdine=#{flagRiciclaOrdine}"
+      inputMac << "&stabilimento=#{stabilimento.strip}"
+      inputMac << "&#{stringaSegreta.strip}"
       # qui potrei aggiungere gli eventuali parametri facoltativi :
       # 'tipoPagamento' e 'causalePagamento'
 
@@ -59,68 +58,68 @@ module Spree
 
       # Compute the url
       inputUrl = "https://pagamenti.unicredito.it/initInsert.do?numeroCommerciante=#{numeroCommerciante.strip}"
-      inputUrl << "&stabilimento=#{stabilimento.strip}"
       inputUrl << "&userID=#{userID.strip}"
       inputUrl << "&password=Password";      #la password vera viene usata solo per il calcolo del MAC e non viene inviata al sito dei pagamenti (qui è sostituita con il valore fittizio "Password")
-      inputUrl << "&numeroOrdine=#{numeroOrdine.strip}"
+      inputUrl << "&numeroOrdine=#{numeroOrdine.strip}--#{@order.payment_sequence}"
       inputUrl << "&totaleOrdine=#{totaleOrdine.strip}"
       inputUrl << "&valuta=#{valuta.strip}"
-      inputUrl << "&flagRiciclaOrdine=#{flagRiciclaOrdine.strip}"
       inputUrl << "&flagDeposito=#{flagDeposito.strip}"
-      inputUrl << "&tipoRispostaApv=#{tipoRispostaApv.strip}"
       inputUrl << "&urlOk=#{CGI.escape urlOk.strip}"
       inputUrl << "&urlKo=#{CGI.escape urlKo.strip}"
+      inputUrl << "&tipoRispostaApv=#{tipoRispostaApv.strip}"
+      inputUrl << "&flagRiciclaOrdine=#{flagRiciclaOrdine.strip}"
+      inputUrl << "&stabilimento=#{stabilimento.strip}"
       inputUrl << "&mac=#{CGI.escape mac}"
 
       @form_url = inputUrl
     end
 
     def result_ko
-      # load order and payment method
       begin
-        @order = Spree::Order.find_by_number(params[:numeroOrdine])
-        @payment_method = @order.payment_method
+        @order = get_order_from_params(params)
         stringaSegreta = @payment_method.preferred_stringa_segreta
       rescue
-        flash[:error] = "ERRORE nei parametri ricevuti da PagOnline: #{params.inspect}"
+        flash[:error] = "ERROR: missing order params from PagOnline"
         redirect_to checkout_state_url(:payment)
         return
       end
+
       # make string for MAC code
       inputMac  = "numeroOrdine=#{params[:numeroOrdine]}"
       inputMac << "&numeroCommerciante=#{params[:numeroCommerciante]}"
       inputMac << "&stabilimento=#{params[:stabilimento]}"
       inputMac << "&esito=#{params[:esito]}"
       inputMac << "&#{stringaSegreta.to_s.strip}"
+
     	# Compute MAC code
       mac = mac_code(inputMac)
+
     	# test the MAC param
     	if mac == params[:mac]
-        flash[:error] = "Esito transazione con Unicredito PagOnline negativo."
+        flash[:error] = "Unicredito PagOnline: payment cancelled"
+        @order.increment(:payment_sequence)
+        @order.save
         redirect_to checkout_state_url(:payment)
         return
       else
-        flash[:error] = "Mac code non corretto. Operazione annullata."
+        flash[:error] = "ERROR: wrong MAC code, payment cancelled"
         redirect_to checkout_state_url(:payment)
         return
       end
     end
 
+
     def result_ok
-      Rails.logger.info "UnicreditPagonlineController#result_ok:params: #{params.inspect}"
-      # load order and payment method
       begin
-        @order = Spree::Order.find_by_number(params[:numeroOrdine])
-        @payment_method = @order.payment_method
+        @order = get_order_from_params(params)
         stringaSegreta = @payment_method.preferred_stringa_segreta
         # set order state = processing
-        @order.payment.started_processing
+        payment = @order.payments.order(created_at: :desc).where(state: :checkout).first
       rescue
-        flash[:error] = "ERRORE nei parametri ricevuti da PagOnline: #{params.inspect}"
-        Rails.logger.info "UnicreditPagonlineController#result_ok : ERRORE caricando i dati: #{@order} #{@payment_method} #{stringaSegreta}"
+        flash[:error] = "ERROR: missing order params from PagOnline"
         redirect_to checkout_state_url(:payment)
-        return
       end
+
       # make string for MAC code
       inputMac  = "numeroOrdine=#{params[:numeroOrdine]}"
       inputMac << "&numeroCommerciante=#{params[:numeroCommerciante]}"
@@ -128,23 +127,30 @@ module Spree
       inputMac << "&esito=#{params[:esito]}"
     	inputMac << "&dataApprovazione=#{params[:dataApprovazione]}"
       inputMac << "&#{stringaSegreta.to_s.strip}"
+
     	# Compute MAC code
       mac = mac_code(inputMac)
+
     	# test the MAC param
     	if mac == params[:mac]
-        @order.payment.complete
-        @order.next
+        @order.next # now order is completed with payment_state: "pending"
+
+        payment.amount = @order.payment_temp_total
+        payment.started_processing
+        payment.complete
+
+        @order.payment_temp_total = 0
         @order.save
+
         session[:order_id] = nil
-        Rails.logger.info "UnicreditPagonlineController#result_ok : tutto OK, ordine completato, #{@order.inspect}"
-        redirect_to order_url(@order, {:checkout_complete => true, :token => @order.token}), :notice => I18n.t("unicredit_pagonline_payment_success")
+        redirect_to order_url(@order, {:checkout_complete => true, :token => @order.token})
       else
         @order.payment.fail
-        Rails.logger.info "UnicreditPagonlineController#result_ok : ERRORE, mac errato, calcolato=#{mac} param=#{params[:mac]}"
-        flash[:error] = "Mac code non corretto. Operazione annullata."
+        flash[:error] = "ERROR: wrong MAC code, payment cancelled"
         redirect_to checkout_state_url(:payment)
       end
     end
+
 
     def eventlistener
       @msg = "UnicreditPagonlineController#eventlistener"
@@ -233,6 +239,19 @@ module Spree
 
     def mac_code(string)
       return  Digest::MD5.base64digest(string)
+    end
+
+    def set_payment_method
+      @payment_method = Spree::PaymentMethod.find_by_type Spree::BillingIntegration::UnicreditPagonline
+
+      if @payment_method.blank?
+        flash[:error] = "ERROR, UnicreditPagonline not available"
+        redirect_to checkout_state_url(:payment)
+      end
+    end
+
+    def get_order_from_params(params)
+      Spree::Order.find_by_number params[:numeroOrdine].split('--').first
     end
 
   end
