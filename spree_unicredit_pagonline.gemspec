@@ -18,4 +18,5 @@ Gem::Specification.new do |s|
   s.has_rdoc = true
 
   s.add_dependency('spree_core', '>= 1.3.2')
+  s.add_dependency('httparty', '~> 0.13.1')
 end

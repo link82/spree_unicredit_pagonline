@@ -5,7 +5,7 @@ module Spree
     helper 'spree/orders'
 
     skip_before_filter :verify_authenticity_token
-    before_filter :set_payment_method
+    before_filter :set_payment_method, except: :ask_feedback
 
 
     def show
@@ -97,7 +97,7 @@ module Spree
       mac = mac_code(inputMac)
 
     	# test the MAC param
-    	if mac == params[:mac]
+    	if Rails.env == 'development' || mac == params[:mac]
         flash[:error] = "Unicredito PagOnline: payment cancelled"
         @order.increment(:payment_sequence)
         @order.save
@@ -110,6 +110,43 @@ module Spree
       end
     end
 
+    def ask_feedback
+
+      logger.info("Checking order and payment method variables")
+      return if (@order.nil? || @payment_method.nil?)
+
+
+      # Preferred data
+      userID = @payment_method.preferred_user_id
+      password = @payment_method.preferred_password
+
+      inputMac = "numeroCommerciante=#{params[:numeroCommerciante]}"
+      inputMac << "&stabilimento=#{params[:stabilimento]}"
+      inputMac << "&userID=#{userID.strip}"
+      inputMac << "&password=#{password.strip}"
+      inputMac << "&tipoComando=SEND_STATE"
+      inputMac << "&formatoRisposta=plaintext"
+      inputMac << "numeroOrdine=#{params[:numeroOrdine]}"
+
+      # Compute MAC code
+      mac = mac_code(inputMac)
+
+      # Compute the url
+      inputUrl = "https://pagamenti.unicredito.it/backoffice/servizi/execute_remote_command.do?"
+
+      inputUrl << "numeroCommerciante=#{params[:numeroCommerciante]}"
+      inputUrl << "&stabilimento=#{params[:stabilimento]}"
+      inputUrl << "&userID=#{userID.strip}"
+      inputUrl << "&password=#{password.strip}"
+      inputUrl << "&tipoComando=SEND_STATE"
+      inputUrl << "&formatoRisposta=plaintext"
+      inputUrl << "numeroOrdine=#{params[:numeroOrdine]}"
+      inputUrl << "&mac=#{CGI.escape mac}"
+
+      response = HTTParty.get(inputUrl)
+      puts response.body, response.code, response.message, response.headers.inspect
+
+    end
 
     def result_ok
       begin
@@ -133,14 +170,16 @@ module Spree
       mac = mac_code(inputMac)
 
     	# test the MAC param
-    	if mac == params[:mac]
-        @order.next # now order is completed with payment_state: "pending"
+    	if Rails.env == 'development' || mac == params[:mac]
+        logger.info "STO PER CHIUDERE L'ORDINE...."
 
+        @order.next # now order is completed with payment_state: "pending"
         payment.amount = payment.temp_total
         payment.temp_total = 0
         payment.started_processing
         payment.complete
 
+        ask_feedback
         session[:order_id] = nil
         redirect_to order_url(@order, {:checkout_complete => true, :token => @order.token})
       else
@@ -152,6 +191,7 @@ module Spree
 
 
     def listener
+      logger.info "****** SONO QUI!!!!! ******"
       begin
         order = get_order_from_params(params)
         stringaSegreta = @payment_method.preferred_stringa_segreta
@@ -172,10 +212,8 @@ module Spree
       mac = mac_code(inputMac)
 
     	# test the MAC param
-    	if true || mac == params[:mac]
+    	if Rails.env == 'development' || mac == params[:mac]
         if params[:tipomessaggio] == "PAYMENT_STATE" and params[:statoattuale] && payment.present? && order.present?
-
-          asd
 
           case params[:statoattuale]
 
@@ -247,7 +285,8 @@ module Spree
     end
 
     def get_order_from_params(params)
-      Spree::Order.find_by_number params[:numeroOrdine].split('--').first
+      logger.info("---> ORDER NUMBER = #{params[:numeroOrdine]} <----")
+      Spree::Order.find_by_number(params[:numeroOrdine].split('--').first)
     end
 
     def get_payment_from_order_number(order_number)

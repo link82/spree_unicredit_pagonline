@@ -14,6 +14,7 @@ module Spree
         @order.update_attributes payment_method_hash
 
         redirect_to main_app.unicredit_pagonline_show_path
+        #redirect_to unicredit_pagonline_show_path(:order_id => @order.id, :payment_method_id => @payment_method.id)
       end
     end
   end
